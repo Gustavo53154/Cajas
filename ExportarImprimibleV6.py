@@ -19,6 +19,7 @@ def set_page_orientation(sheet, sheet_name):
 
 def apply_borders(sheet, last_row, last_column):
     border_range = sheet.Range(sheet.Cells(1, 1), sheet.Cells(last_row, last_column + 1))
+
     xlEdgeLeft = 7
     xlEdgeTop = 8
     xlEdgeBottom = 9
@@ -42,9 +43,15 @@ def save_sheet_as_pdf(sheet, output_dir, pdf_filename):
     sheet.PageSetup.CenterHorizontally = True
     sheet.PageSetup.CenterVertically = True
 
-    last_column = sheet.Cells(1, sheet.Columns.Count).End(-4159).Column
+    # 🔥 CAMBIO AQUÍ
+    last_column = sheet.UsedRange.Columns.Count
+
     last_row = min(sheet.Cells(sheet.Rows.Count, 1).End(-4162).Row, 74)
-    sheet.PageSetup.PrintArea = sheet.Range(sheet.Cells(1, 1), sheet.Cells(last_row, last_column + 1)).Address
+
+    sheet.PageSetup.PrintArea = sheet.Range(
+        sheet.Cells(1, 1),
+        sheet.Cells(last_row, last_column + 1)
+    ).Address
 
     apply_borders(sheet, last_row, last_column)
 
@@ -67,14 +74,14 @@ def process_excel_to_pdf(excel_path, output_dir):
     os.makedirs(days_folder, exist_ok=True)
     os.makedirs(combined_folder, exist_ok=True)
     
-    # Inicializar la lista para agrupar 5 hojas por día
     day_group = []
     sheet_count = 0
-    day_index = 0  # Índice para los días de la semana
+    day_index = 0
     
     for sheet in workbook.Sheets:
         if sheet.UsedRange.Count > 1:
             sheet_name = sheet.Name
+
             adjust_column_width(sheet, sheet_name)
             set_page_orientation(sheet, sheet_name)
             
@@ -85,7 +92,6 @@ def process_excel_to_pdf(excel_path, output_dir):
             day_group.append(pdf_path)
             sheet_count += 1
             
-            # Cada 5 hojas, guarda un PDF con el nombre del día correspondiente
             if sheet_count == 5:
                 day_pdf_path = os.path.join(days_folder, f"{dias_de_la_semana[day_index]}.pdf")
                 merger = PdfMerger()
@@ -98,14 +104,13 @@ def process_excel_to_pdf(excel_path, output_dir):
 
                 grouped_pdfs.append(day_pdf_path)
 
-                # Resetear para el siguiente día
                 day_group = []
                 sheet_count = 0
                 day_index += 1
-                if day_index >= len(dias_de_la_semana):
-                    day_index = 0  # Evitar desbordamiento
 
-    # Si hay hojas restantes que no completan un grupo de 5, agrégalas al siguiente día
+                if day_index >= len(dias_de_la_semana):
+                    day_index = 0
+
     if day_group:
         day_pdf_path = os.path.join(days_folder, f"{dias_de_la_semana[day_index]}.pdf")
         merger = PdfMerger()
@@ -117,7 +122,6 @@ def process_excel_to_pdf(excel_path, output_dir):
         merger.close()
         grouped_pdfs.append(day_pdf_path)
     
-    # Combinar todos los PDFs en uno solo
     final_pdf_path = os.path.join(combined_folder, "combined_output.pdf")
     merger = PdfMerger()
     
@@ -132,11 +136,11 @@ def process_excel_to_pdf(excel_path, output_dir):
     
     print(f"Proceso completado. Todos los archivos PDF se han guardado en {output_dir}")
 
-# Definir la ruta del archivo y directorio de salida
+# Rutas
 current_directory = os.path.dirname(os.path.abspath(__file__))
 excel_file_path = os.path.join(current_directory, "Horario_Semana_Completo.xlsx")
 output_directory = os.path.join(current_directory, "Exportados")
+
 os.makedirs(output_directory, exist_ok=True)
 
-# Ejecutar el proceso
 process_excel_to_pdf(excel_file_path, output_directory)

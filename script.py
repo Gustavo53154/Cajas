@@ -47,7 +47,7 @@ def menu():
         elif choice == '2':
             run_script('limpiarHorario.py')
         elif choice == '3':
-            run_script('registrarHorarioV6.py')
+            run_script('registrarHorarioV7.py')
         elif choice == '31':
             run_script('editarHorario.py')
         elif choice == '32':

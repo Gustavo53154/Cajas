@@ -105,7 +105,7 @@ def registrar_horario_por_categoria(categoria, personal):
                         salida = input(f"Ingrese la hora de salida para {nombres} {apellidos} el {dia} (ej. 645, 9, 16, *, **, ***, +, ++, .): ")
 
                         if salida == "+":
-                            jornada_duracion = (3, 45)  # Part-time
+                            jornada_duracion = (4, 30)  # Part-time
                             salida_formateada = sumar_duracion(entrada_formateada, jornada_duracion)
                         elif salida == "++":
                             jornada_duracion = (9, 0)  # Full-time
@@ -184,7 +184,7 @@ def registrar_horario_manualmente(personal):
                             salida = input(f"Ingrese la hora de salida para {nombres} {apellidos} el {dia} (ej. 645, 9, 16, *, **, ***, +, ++, .): ")
 
                             if salida == "+":
-                                jornada_duracion = (3, 45)  # Part-time
+                                jornada_duracion = (4, 30)  # Part-time
                                 salida_formateada = sumar_duracion(entrada_formateada, jornada_duracion)
                             elif salida == "++":
                                 jornada_duracion = (9, 0)  # Full-time
