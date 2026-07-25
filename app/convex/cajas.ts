@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { mutation, query, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireUser, requireUserProfile } from "./_helpers";
-import { audit } from "./auditoria";
+import { audit } from "./logs";
 
 // ============================
 // CAJAS (configuración de las 30 cajas)
@@ -73,6 +73,14 @@ export const createFuncion = mutation({
       nombre: args.nombre,
       color: args.color,
     });
+  },
+});
+
+export const deleteFuncion = mutation({
+  args: { id: v.id("funcionesSecundarias") },
+  handler: async (ctx, args) => {
+    await requireUser(ctx);
+    await ctx.db.delete(args.id);
   },
 });
 

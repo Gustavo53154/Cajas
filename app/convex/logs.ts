@@ -3,7 +3,7 @@ import { mutation, query, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireUser } from "./_helpers";
 
-// Helper interno de auditoría
+// Helper interno de logs
 export async function audit(
   ctx: MutationCtx,
   args: {
@@ -26,7 +26,7 @@ export async function audit(
       .first();
     if (user) usuarioId = user._id;
   }
-  await ctx.db.insert("auditoria", {
+  await ctx.db.insert("logs", {
     tiendaId: args.tiendaId,
     usuarioId,
     usuarioNombre,
@@ -39,7 +39,7 @@ export async function audit(
   });
 }
 
-export const listAuditoria = query({
+export const listLogs = query({
   args: {
     tiendaId: v.id("tiendas"),
     entidad: v.optional(v.string()),
@@ -49,11 +49,11 @@ export const listAuditoria = query({
     await requireUser(ctx);
     const limit = args.limit ?? 100;
     let q = ctx.db
-      .query("auditoria")
+      .query("logs")
       .withIndex("by_tienda", (q2) => q2.eq("tiendaId", args.tiendaId));
     if (args.entidad) {
       q = ctx.db
-        .query("auditoria")
+        .query("logs")
         .withIndex("by_tienda_entidad", (q2) =>
           q2.eq("tiendaId", args.tiendaId).eq("entidad", args.entidad),
         );

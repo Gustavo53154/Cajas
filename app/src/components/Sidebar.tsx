@@ -11,7 +11,6 @@ import {
   Ticket,
   ClipboardCheck,
   GraduationCap,
-  CalendarDays,
   ListTodo,
   History,
   LogOut,
@@ -20,6 +19,7 @@ import {
   Tag,
   Settings,
   Grid3X3,
+  CalendarClock,
 } from "lucide-react";
 import { useQuery } from "convex/react";
 import { useRouter } from "next/navigation";
@@ -30,21 +30,21 @@ import { Button } from "@/components/ui/button";
 import { useAuth, useCurrentUser } from "@/hooks/useAuth";
 
 const NAV = [
-  { href: "/tablero", label: "Tablero en vivo", icon: LayoutDashboard, badge: "TIEMPO REAL" },
   { href: "/personal", label: "Personal", icon: Users },
   { href: "/horarios", label: "Horarios", icon: Calendar },
-  { href: "/cobertura", label: "Cobertura", icon: Grid3X3 },
-  { href: "/planillas", label: "Planillas ES", icon: Monitor },
   { href: "/cajas", label: "Asignar Cajas", icon: Store },
+  { href: "/tablero", label: "Tablero en vivo", icon: LayoutDashboard, badge: "TIEMPO REAL" },
   { href: "/funciones", label: "Funciones Secundarias", icon: Tag },
+  { href: "/planillas", label: "Planillas ES", icon: Monitor },
+  { href: "/cobertura", label: "Cobertura", icon: Grid3X3 },
   { href: "/indicadores", label: "Indicadores SIP", icon: TrendingUp },
   { href: "/velocidad", label: "Velocidad", icon: Gauge },
   { href: "/tinkas", label: "Tinkas", icon: Ticket },
+  { href: "/tareas", label: "Tareas del área", icon: ListTodo },
   { href: "/evaluaciones", label: "Evaluaciones", icon: ClipboardCheck },
   { href: "/inducciones", label: "Inducciones", icon: GraduationCap },
-  { href: "/reuniones", label: "Reuniones", icon: CalendarDays },
-  { href: "/tareas", label: "Tareas del área", icon: ListTodo },
-  { href: "/auditoria", label: "Auditoría", icon: History },
+  { href: "/capacitaciones", label: "Capacitaciones", icon: CalendarClock },
+  { href: "/logs", label: "Logs", icon: History },
   { href: "/configuracion", label: "Configuración", icon: Settings },
 ];
 

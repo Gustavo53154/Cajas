@@ -5,7 +5,7 @@ Plataforma de gestión del área de cajas para Plaza Vea (Next.js 16 + Convex).
 ## ✅ Estado actual: MVP completo y funcional
 
 Los 18 módulos están implementados:
-- Auth (custom con hash + localStorage), Personal, Horarios (con pegado masivo), Planillas ES, Cajas (algoritmo de 30 cajas), Tablero en vivo, Indicadores SIP, Velocidad, Tinkas, Evaluaciones, Inducciones, Reuniones, Tareas, Notificaciones, Auditoría.
+- Auth (custom con hash + localStorage), Personal, Horarios (con pegado masivo), Planillas ES, Cajas (algoritmo de 30 cajas), Tablero en vivo, Indicadores SIP, Velocidad, Tinkas, Evaluaciones, Inducciones, Reuniones, Tareas, Notificaciones, Logs.
 
 ## 🚀 Pasos para correrlo
 
@@ -74,7 +74,7 @@ Para producción, migrar a:
 | Inducciones | `/inducciones` | Programar + marcar recibidos |
 | Reuniones | `/reuniones` | 1, varios, específicos, toda el área |
 | Tareas | `/tareas` | Recurrentes + del momento + plazo |
-| Auditoría | `/auditoria` | Historial de cambios |
+| Logs | `/logs` | Historial de cambios |
 
 ## 🏗️ Estructura
 - `convex/` — backend (schema, queries, mutations)

@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireUser, requireUserProfile } from "./_helpers";
-import { audit } from "./auditoria";
+import { requireUser } from "./_helpers";
+import { audit } from "./logs";
 
 // ============================
 // PLANTILLAS
@@ -16,6 +16,23 @@ const recurrenciaEnum = v.union(
   v.literal("diaria"),
   v.literal("15dias"),
   v.literal("unica"),
+);
+
+const cargoEnum = v.union(
+  v.literal("Cajer@"),
+  v.literal("Self Checkout"),
+  v.literal("RS"),
+  v.literal("Ecommerce"),
+  v.literal("Supervisor(@)"),
+  v.literal("JefeCajas"),
+  v.literal("SubGerente"),
+  v.literal("Gerente"),
+);
+
+const asignadosModoEnum = v.union(
+  v.literal("todos"),
+  v.literal("cargo"),
+  v.literal("personales"),
 );
 
 export const listPlantillas = query({
@@ -42,6 +59,10 @@ export const createPlantilla = mutation({
       }),
     ),
     recurrencia: recurrenciaEnum,
+    obligatoria: v.optional(v.boolean()),
+    asignadosModo: v.optional(asignadosModoEnum),
+    asignadosCargo: v.optional(cargoEnum),
+    asignadosIds: v.optional(v.array(v.id("personales"))),
   },
   handler: async (ctx, args) => {
     await requireUser(ctx);
@@ -51,6 +72,10 @@ export const createPlantilla = mutation({
       tipoNota: args.tipoNota,
       campos: args.campos,
       recurrencia: args.recurrencia,
+      obligatoria: args.obligatoria ?? false,
+      asignadosModo: args.asignadosModo ?? "todos",
+      asignadosCargo: args.asignadosCargo,
+      asignadosIds: args.asignadosIds,
       activa: true,
       createdAt: Date.now(),
     });
@@ -78,6 +103,10 @@ export const updatePlantilla = mutation({
         }),
       ),
     ),
+    obligatoria: v.optional(v.boolean()),
+    asignadosModo: v.optional(asignadosModoEnum),
+    asignadosCargo: v.optional(cargoEnum),
+    asignadosIds: v.optional(v.array(v.id("personales"))),
     activa: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -97,6 +126,28 @@ export const updatePlantilla = mutation({
       entidadId: id,
       antes: before,
       despues: { ...before, ...updates },
+    });
+  },
+});
+
+export const removePlantilla = mutation({
+  args: { id: v.id("plantillasEvaluacion") },
+  handler: async (ctx, args) => {
+    await requireUser(ctx);
+    const before = await ctx.db.get(args.id);
+    if (!before) throw new Error("Plantilla no encontrada");
+    const evaluaciones = await ctx.db
+      .query("evaluaciones")
+      .withIndex("by_plantilla", (q) => q.eq("plantillaId", args.id))
+      .collect();
+    for (const e of evaluaciones) await ctx.db.delete(e._id);
+    await ctx.db.delete(args.id);
+    await audit(ctx, {
+      tiendaId: before.tiendaId,
+      accion: "eliminar",
+      entidad: "plantillasEvaluacion",
+      entidadId: args.id,
+      antes: before,
     });
   },
 });
@@ -129,6 +180,18 @@ export const getEvaluacionesPersonal = query({
   },
 });
 
+export const getEvaluacionesByPlantilla = query({
+  args: { plantillaId: v.id("plantillasEvaluacion") },
+  handler: async (ctx, args) => {
+    await requireUser(ctx);
+    const all = await ctx.db
+      .query("evaluaciones")
+      .withIndex("by_plantilla", (q) => q.eq("plantillaId", args.plantillaId))
+      .collect();
+    return all.sort((a, b) => (a.fechaProgramada < b.fechaProgramada ? 1 : -1));
+  },
+});
+
 export const upsertEvaluacion = mutation({
   args: {
     plantillaId: v.id("plantillasEvaluacion"),
@@ -146,7 +209,8 @@ export const upsertEvaluacion = mutation({
     observaciones: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { profile } = await requireUserProfile(ctx);
+    const plantilla = await ctx.db.get(args.plantillaId);
+    if (!plantilla) throw new Error("Plantilla no encontrada");
     const existing = await ctx.db
       .query("evaluaciones")
       .withIndex("by_personal", (q) => q.eq("personalId", args.personalId))
@@ -167,7 +231,7 @@ export const upsertEvaluacion = mutation({
       return existing._id;
     }
     return await ctx.db.insert("evaluaciones", {
-      tiendaId: profile.tiendaId,
+      tiendaId: plantilla.tiendaId,
       plantillaId: args.plantillaId,
       fechaProgramada: args.fechaProgramada,
       personalId: args.personalId,
@@ -176,5 +240,93 @@ export const upsertEvaluacion = mutation({
       fechaRealizada: args.fechaRealizada,
       observaciones: args.observaciones,
     });
+  },
+});
+
+// ============================
+// CUMPLIMIENTO (para plantillas obligatorias)
+// ============================
+export const getCumplimiento = query({
+  args: {
+    plantillaId: v.id("plantillasEvaluacion"),
+    fecha: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await requireUser(ctx);
+    const plantilla = await ctx.db.get(args.plantillaId);
+    if (!plantilla) throw new Error("Plantilla no encontrada");
+    if (!plantilla.obligatoria) return null;
+
+    const personales = await ctx.db
+      .query("personales")
+      .withIndex("by_tienda", (q) => q.eq("tiendaId", plantilla.tiendaId))
+      .collect();
+
+    let esperados: typeof personales = [];
+    if (plantilla.asignadosModo === "todos") {
+      esperados = personales.filter((p) => p.activo);
+    } else if (plantilla.asignadosModo === "cargo" && plantilla.asignadosCargo) {
+      esperados = personales.filter(
+        (p) => p.activo && p.cargo === plantilla.asignadosCargo,
+      );
+    } else if (plantilla.asignadosModo === "personales" && plantilla.asignadosIds) {
+      const setIds = new Set(plantilla.asignadosIds);
+      esperados = personales.filter((p) => p.activo && setIds.has(p._id));
+    }
+    esperados.sort((a, b) => a.orden - b.orden);
+
+    const evaluaciones = await ctx.db
+      .query("evaluaciones")
+      .withIndex("by_plantilla", (q) => q.eq("plantillaId", args.plantillaId))
+      .collect();
+
+    let enPeriodo = evaluaciones;
+    if (plantilla.recurrencia === "15dias") {
+      const yyyy = args.fecha.slice(0, 4);
+      const mm = args.fecha.slice(5, 7);
+      const dia = parseInt(args.fecha.slice(8, 10), 10);
+      const desde = `${yyyy}-${mm}-${dia <= 15 ? "01" : "16"}`;
+      const ultimoDia = new Date(parseInt(yyyy, 10), parseInt(mm, 10), 0).getDate();
+      const hasta = `${yyyy}-${mm}-${dia <= 15 ? "15" : String(ultimoDia).padStart(2, "0")}`;
+      enPeriodo = evaluaciones.filter(
+        (e) => e.fechaProgramada >= desde && e.fechaProgramada <= hasta,
+      );
+    } else {
+      enPeriodo = evaluaciones.filter((e) => e.fechaProgramada === args.fecha);
+    }
+
+    const porPersonal = new Map(enPeriodo.map((e) => [e.personalId, e]));
+
+    const detalle = esperados.map((p) => {
+      const ev = porPersonal.get(p._id);
+      return {
+        personalId: p._id,
+        apellidos: p.apellidos,
+        nombres: p.nombres,
+        nick: p.nick,
+        cargo: p.cargo,
+        estado: ev ? ("hecho" as const) : ("pendiente" as const),
+        notaFinal: ev?.notaFinal,
+        fechaRealizada: ev?.fechaRealizada,
+        observaciones: ev?.observaciones,
+        evaluacionId: ev?._id,
+      };
+    });
+
+    const total = detalle.length;
+    const hechos = detalle.filter((d) => d.estado === "hecho").length;
+    return {
+      plantilla: {
+        _id: plantilla._id,
+        nombre: plantilla.nombre,
+        asignadosModo: plantilla.asignadosModo,
+        asignadosCargo: plantilla.asignadosCargo,
+      },
+      fecha: args.fecha,
+      total,
+      hechos,
+      pendientes: total - hechos,
+      detalle,
+    };
   },
 });

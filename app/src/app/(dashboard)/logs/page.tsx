@@ -9,11 +9,11 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { History } from "lucide-react";
 
-export default function AuditoriaPage() {
+export default function LogsPage() {
   const tienda = useQuery(api.tiendas.getTiendaDefault);
   const [entidad, setEntidad] = useState<string>("all");
   const log = useQuery(
-    api.auditoria.listAuditoria,
+    api.logs.listLogs,
     tienda ? { tiendaId: tienda._id, entidad: entidad === "all" ? undefined : entidad, limit: 200 } : "skip"
   );
 
@@ -23,7 +23,7 @@ export default function AuditoriaPage() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <History className="h-6 w-6" />
-            Auditoría
+            Logs
           </h1>
           <p className="text-sm text-muted-foreground">Historial de cambios en el sistema</p>
         </div>

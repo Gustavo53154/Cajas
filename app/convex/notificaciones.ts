@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { getCurrentUser, requireUser, requireUserProfile } from "./_helpers";
-import { audit } from "./auditoria";
+import { audit } from "./logs";
 
 export const listByUser = query({
   args: {},

@@ -44,6 +44,7 @@ const estadoTareaEnum = v.union(
   v.literal("pendiente"),
   v.literal("en_curso"),
   v.literal("completada"),
+  v.literal("vencida"),
 );
 
 const estadoSemanaEnum = v.union(
@@ -56,6 +57,42 @@ const estadoAsignacionEnum = v.union(
   v.literal("refrigerio"),
   v.literal("inasistencia"),
   v.literal("finalizada"),
+);
+
+const tipoCapacitacionEnum = v.union(
+  v.literal("induccion"),
+  v.literal("reunion"),
+);
+
+const estadoCapacitacionEnum = v.union(
+  v.literal("programada"),
+  v.literal("en_curso"),
+  v.literal("completada"),
+  v.literal("vencida"),
+  v.literal("cancelada"),
+);
+
+const patronTareaEnum = v.union(
+  v.literal("diaria"),
+  v.literal("laborables"),
+  v.literal("finde"),
+  v.literal("personalizada"),
+);
+
+const diaSemanaEnum = v.union(
+  v.literal("lun"),
+  v.literal("mar"),
+  v.literal("mie"),
+  v.literal("jue"),
+  v.literal("vie"),
+  v.literal("sab"),
+  v.literal("dom"),
+);
+
+const modoAsignacionTareaEnum = v.union(
+  v.literal("manual"),
+  v.literal("rotativa"),
+  v.literal("compartida"),
 );
 
 export default defineSchema({
@@ -183,6 +220,14 @@ export default defineSchema({
       })
     ),
     recurrencia: recurrenciaEnum,
+    obligatoria: v.boolean(),
+    asignadosModo: v.union(
+      v.literal("todos"),
+      v.literal("cargo"),
+      v.literal("personales"),
+    ),
+    asignadosCargo: v.optional(cargoEnum),
+    asignadosIds: v.optional(v.array(v.id("personales"))),
     activa: v.boolean(),
     createdAt: v.number(),
   }).index("by_tienda", ["tiendaId"]),
@@ -213,6 +258,8 @@ export default defineSchema({
     tema: v.string(),
     descripcion: v.string(),
     fechaProgramada: v.string(),
+    fechaFin: v.optional(v.string()),
+    dias: v.array(v.string()),
     plazo: v.optional(v.string()),
     asistenciales: v.array(
       v.object({
@@ -221,11 +268,35 @@ export default defineSchema({
         nota: v.optional(v.string()),
       })
     ),
-    createdBy: v.id("users"),
+    modoAsignacion: v.union(
+      v.literal("manual"),
+      v.literal("cargo"),
+      v.literal("todos")
+    ),
+    cargos: v.optional(
+      v.array(
+        v.union(
+          v.literal("Cajer@"),
+          v.literal("Self Checkout"),
+          v.literal("RS"),
+          v.literal("Ecommerce")
+        )
+      )
+    ),
+    personalIds: v.array(v.id("personales")),
+    estado: v.union(
+      v.literal("programada"),
+      v.literal("en_curso"),
+      v.literal("completada"),
+      v.literal("vencida"),
+      v.literal("cancelada")
+    ),
+    createdBy: v.optional(v.id("users")),
     createdAt: v.number(),
   })
     .index("by_tienda", ["tiendaId"])
-    .index("by_tienda_fecha", ["tiendaId", "fechaProgramada"]),
+    .index("by_tienda_fecha", ["tiendaId", "fechaProgramada"])
+    .index("by_tienda_estado", ["tiendaId", "estado"]),
 
   // ===== Reuniones =====
   reuniones: defineTable({
@@ -250,7 +321,22 @@ export default defineSchema({
     descripcion: v.optional(v.string()),
     horaSugerida: v.optional(v.string()),
     activa: v.boolean(),
-  }).index("by_tienda", ["tiendaId"]),
+    // Frecuencia
+    patron: patronTareaEnum,
+    diasSemana: v.optional(v.array(diaSemanaEnum)),
+    // Asignación
+    modoAsignacion: modoAsignacionTareaEnum,
+    poolIds: v.optional(v.array(v.id("personales"))),
+    asignadosFijosIds: v.optional(v.array(v.id("personales"))),
+    rotativoIndice: v.optional(v.number()),
+    rotativoSentido: v.optional(
+      v.union(v.literal("secuencial"), v.literal("aleatorio"))
+    ),
+    ultimaMaterializacion: v.optional(v.string()),
+    skippedDates: v.optional(v.array(v.string())),
+  })
+    .index("by_tienda", ["tiendaId"])
+    .index("by_tienda_activa", ["tiendaId", "activa"]),
 
   tareasInstancia: defineTable({
     tiendaId: v.id("tiendas"),
@@ -261,12 +347,51 @@ export default defineSchema({
     recurrenteId: v.optional(v.id("tareasRecurrentes")),
     asignadosIds: v.array(v.id("personales")),
     completadosIds: v.array(v.id("personales")),
+    responsableId: v.optional(v.id("personales")),
+    colaboradoresIds: v.array(v.id("personales")),
+    parentInstanciaId: v.optional(v.id("tareasInstancia")),
     estado: estadoTareaEnum,
-    createdBy: v.id("users"),
+    createdBy: v.optional(v.id("users")),
     createdAt: v.number(),
   })
     .index("by_tienda_fecha", ["tiendaId", "fecha"])
-    .index("by_tienda_estado", ["tiendaId", "estado"]),
+    .index("by_tienda_estado", ["tiendaId", "estado"])
+    .index("by_tienda_fecha_responsable", ["tiendaId", "fecha", "responsableId"]),
+
+  // ===== Capacitaciones (inducciones + reuniones fusionadas) =====
+  capacitaciones: defineTable({
+    tiendaId: v.id("tiendas"),
+    tema: v.string(),
+    descripcion: v.optional(v.string()),
+    tipo: v.optional(tipoCapacitacionEnum),
+    motivo: v.optional(v.string()),
+    fechaInicio: v.string(),
+    fechaFin: v.string(),
+    turnos: v.array(
+      v.object({
+        id: v.string(),
+        fecha: v.string(),
+        hora: v.string(),
+        duracionMin: v.number(),
+      })
+    ),
+    personalIds: v.array(v.id("personales")),
+    estado: estadoCapacitacionEnum,
+    notas: v.optional(v.string()),
+    createdBy: v.optional(v.id("users")),
+    createdAt: v.number(),
+  })
+    .index("by_tienda_fecha", ["tiendaId", "fechaInicio"]),
+
+  capacitacionAsignaciones: defineTable({
+    capacitacionId: v.id("capacitaciones"),
+    personalId: v.id("personales"),
+    turnoId: v.optional(v.string()),
+    fechaRecibido: v.optional(v.string()),
+    nota: v.optional(v.string()),
+  })
+    .index("by_capacitacion", ["capacitacionId"])
+    .index("by_personal", ["personalId"]),
 
   // ===== Cajas y asignaciones =====
   cajas: defineTable({
@@ -332,8 +457,8 @@ export default defineSchema({
     .index("by_usuario_leida", ["usuarioId", "leida"])
     .index("by_tienda", ["tiendaId"]),
 
-  // ===== Auditoría =====
-  auditoria: defineTable({
+  // ===== Logs =====
+  logs: defineTable({
     tiendaId: v.id("tiendas"),
     usuarioId: v.optional(v.id("users")),
     usuarioNombre: v.string(),

@@ -153,8 +153,8 @@ export function generarAsignaciones(
   const cajerosNormales = cajeros.filter((p) => !p.soloCajaRapida);
   const cajerosRapida = cajeros.filter((p) => p.soloCajaRapida);
 
-  // El personal de Self Checkout va a las cajas de autoservicio (25-30)
-  const asistenteAuto = personasActivasValidas.find((p) => p.esAsistenteAutoservicio);
+  // El personal de Self Checkout va a las cajas de autoservicio (25-30).
+  // Se asignan TODOS los asistentes disponibles, distribuidos en round-robin.
 
   // El resto (RS, Supervisor, Ecommerce) NO se asigna automáticamente.
   // Se asignan manualmente desde el tablero en vivo.
@@ -281,86 +281,68 @@ export function generarAsignaciones(
   }
 
   // ============================================
-  // CAJA 20 (RÁPIDA) - corre ANTES de C2-C18 para reservar cajeros.
+  // CAJA 20 (RÁPIDA) - solo se asignan 1-2 cajeros (los necesarios para
+  // mantener cobertura). El resto va a C2-C18.
   // C19 está reservada para supervisores.
   // C21-C24 quedan vacías para asignación manual.
-  // La caja C20 debe tener 1-2 cajeros a la vez (nunca 0) desde el
-  // primer cajero disponible hasta al menos las 22:00.
   // ============================================
   const HORA_OBJETIVO_RAPIDA = toMin("22:00");
-  const candidatosRapidas = [
-    ...cajerosRapida,
-    ...cajerosNormales.filter((p) => !usados.has(p._id) && p.entrada >= inicioRapidasMin),
-  ].sort((a, b) => a.entrada - b.entrada);
-
-  // Solo C20 recibe cajeros automáticos. C21-C24 quedan libres.
   const caja20 = cajasRapidas.find((c) => c.codigo === 20);
   if (caja20) {
-    let bloqueNum = 0;
-    let ultimaSalida = 0;
-    for (const p of [...candidatosRapidas]) {
+    // Buscar candidatos para la caja rápida (entrada >= 8:00, no asignados)
+    const candidatosRapidas = [
+      ...cajerosRapida,
+      ...cajerosNormales.filter((p) => !usados.has(p._id) && p.entrada >= inicioRapidasMin),
+    ].sort((a, b) => a.entrada - b.entrada);
+
+    // Paso 1: asignar el primer cajero (el de entrada más temprana) a C20
+    let primerCajero: typeof candidatosRapidas[0] | null = null;
+    for (const p of candidatosRapidas) {
       if (usados.has(p._id)) continue;
-      if (p.entrada < inicioRapidasMin) continue;
-      if (bloqueNum === 0) {
-        result.asignaciones.push({
-          personalId: p._id,
-          cajaId: caja20._id,
-          bloque: 1,
-          horaInicio: fromMin(p.entrada),
-          horaFin: fromMin(p.salida),
-        });
-        result.decisiones.push({
-          personalId: p._id,
-          cajaId: caja20._id,
-          decision: "Caja 20 (rápida) - Asignado",
-          detalle: `${fromMin(p.entrada)} - ${fromMin(p.salida)}`,
-        });
-        usados.add(p._id);
-        ultimaSalida = p.salida;
-        bloqueNum = 1;
-      } else if (p.entrada >= ultimaSalida) {
-        bloqueNum++;
-        result.asignaciones.push({
-          personalId: p._id,
-          cajaId: caja20._id,
-          bloque: bloqueNum,
-          horaInicio: fromMin(p.entrada),
-          horaFin: fromMin(p.salida),
-        });
-        result.decisiones.push({
-          personalId: p._id,
-          cajaId: caja20._id,
-          decision: `Caja 20 (rápida) - Cascada bloque ${bloqueNum}`,
-          detalle: `${fromMin(p.entrada)} - ${fromMin(p.salida)}`,
-        });
-        usados.add(p._id);
-        ultimaSalida = p.salida;
-      }
+      primerCajero = p;
+      break;
     }
-    // Si la cascada de C20 no llega a las 22:00, añadir un transfer
-    // con un cajero que pueda cubrir hasta el objetivo. Esto crea un
-    // empalme de 15 min con el último bloque (queda 2 cjeros por 15 min).
-    if (bloqueNum > 0 && ultimaSalida < HORA_OBJETIVO_RAPIDA) {
-      for (const p of cajerosNormales) {
-        if (usados.has(p._id)) continue;
-        if (p.salida >= HORA_OBJETIVO_RAPIDA) {
-          const horaInicio = fromMin(Math.max(p.entrada, ultimaSalida - 15));
-          result.asignaciones.push({
-            personalId: p._id,
-            cajaId: caja20._id,
-            bloque: bloqueNum + 1,
-            horaInicio,
-            horaFin: fromMin(p.salida),
-            esT: toMin(horaInicio) > p.entrada,
-          });
-          result.decisiones.push({
-            personalId: p._id,
-            cajaId: caja20._id,
-            decision: "Caja 20 (rápida) - transferencia",
-            detalle: `Cubre hasta ${fromMin(p.salida)}`,
-          });
-          usados.add(p._id);
-          break;
+
+    if (primerCajero) {
+      result.asignaciones.push({
+        personalId: primerCajero._id,
+        cajaId: caja20._id,
+        bloque: 1,
+        horaInicio: fromMin(primerCajero.entrada),
+        horaFin: fromMin(primerCajero.salida),
+      });
+      result.decisiones.push({
+        personalId: primerCajero._id,
+        cajaId: caja20._id,
+        decision: "Caja 20 (rápida) - Apertura",
+        detalle: `${fromMin(primerCajero.entrada)} - ${fromMin(primerCajero.salida)}`,
+      });
+      usados.add(primerCajero._id);
+
+      // Paso 2: si la cobertura no llega a las 22:00, hacer un transfer
+      // con un cajero que pueda cubrir hasta el objetivo.
+      if (primerCajero.salida < HORA_OBJETIVO_RAPIDA) {
+        for (const p of cajerosNormales) {
+          if (usados.has(p._id)) continue;
+          if (p.salida >= HORA_OBJETIVO_RAPIDA) {
+            const horaInicio = fromMin(Math.max(p.entrada, primerCajero.salida - 15));
+            result.asignaciones.push({
+              personalId: p._id,
+              cajaId: caja20._id,
+              bloque: 2,
+              horaInicio,
+              horaFin: fromMin(p.salida),
+              esT: toMin(horaInicio) > p.entrada,
+            });
+            result.decisiones.push({
+              personalId: p._id,
+              cajaId: caja20._id,
+              decision: "Caja 20 (rápida) - transferencia",
+              detalle: `Cubre hasta ${fromMin(p.salida)}`,
+            });
+            usados.add(p._id);
+            break;
+          }
         }
       }
     }
@@ -436,37 +418,50 @@ export function generarAsignaciones(
   }
 
   // ============================================
-  // CAJAS 25-30 (AUTOSERVICIO) - UN solo asistente
+  // CAJAS 25-30 (AUTOSERVICIO) - TODOS los asistentes de self checkout
+  // Se distribuyen en round-robin entre las cajas de autoservicio.
+  // El frontend las agrupa todas bajo el bloque virtual "Autoservicio".
   // ============================================
-  if (asistenteAuto) {
-    if (usados.has(asistenteAuto._id)) {
-      result.decisiones.push({
-        personalId: asistenteAuto._id,
-        decision: "Asistente autoservicio omitido",
-        detalle: "Ya estaba asignado en otra caja",
-      });
-    } else {
-      // Asignar a la primera caja de autoservicio (caja 25)
-      const cajaAuto = cajasAutoservicio.sort((a, b) => a.codigo - b.codigo)[0];
+  const asistentesAuto = personasActivasValidas.filter(
+    (p) => p.esAsistenteAutoservicio,
+  );
+  const cajasAutoOrden = [...cajasAutoservicio].sort((a, b) => a.codigo - b.codigo);
+  if (asistentesAuto.length === 0) {
+    result.errores.push("No hay asistente de autoservicio definido para este día");
+  } else if (cajasAutoOrden.length === 0) {
+    result.errores.push("No hay cajas de autoservicio configuradas");
+  } else {
+    for (let i = 0; i < asistentesAuto.length; i++) {
+      const asistente = asistentesAuto[i];
+      if (usados.has(asistente._id)) {
+        result.decisiones.push({
+          personalId: asistente._id,
+          decision: "Asistente autoservicio omitido",
+          detalle: "Ya estaba asignado en otra caja",
+        });
+        continue;
+      }
+      // Distribuir en round-robin entre las cajas de autoservicio.
+      // Si hay más asistentes que cajas, se reutilizan las cajas con bloques adicionales.
+      const cajaAuto = cajasAutoOrden[i % cajasAutoOrden.length];
+      const bloqueNum = Math.floor(i / cajasAutoOrden.length) + 1;
       if (cajaAuto) {
         result.asignaciones.push({
-          personalId: asistenteAuto._id,
+          personalId: asistente._id,
           cajaId: cajaAuto._id,
-          bloque: 1,
-          horaInicio: fromMin(asistenteAuto.entrada),
-          horaFin: fromMin(asistenteAuto.salida),
+          bloque: bloqueNum,
+          horaInicio: fromMin(asistente.entrada),
+          horaFin: fromMin(asistente.salida),
         });
         result.decisiones.push({
-          personalId: asistenteAuto._id,
+          personalId: asistente._id,
           cajaId: cajaAuto._id,
           decision: "Asistente de autoservicio",
-          detalle: `Caja ${cajaAuto.codigo} (representa 25-30): ${fromMin(asistenteAuto.entrada)} - ${fromMin(asistenteAuto.salida)}`,
+          detalle: `Caja ${cajaAuto.codigo} (autoservicio): ${fromMin(asistente.entrada)} - ${fromMin(asistente.salida)}`,
         });
-        usados.add(asistenteAuto._id);
+        usados.add(asistente._id);
       }
     }
-  } else {
-    result.errores.push("No hay asistente de autoservicio definido para este día");
   }
 
   // Huecos en cada caja

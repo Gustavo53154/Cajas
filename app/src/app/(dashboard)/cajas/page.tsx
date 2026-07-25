@@ -59,14 +59,16 @@ export default function CajasPage() {
     }
   }
 
-  async function handleDescargarExcel() {
+  async function handleDescargarExcel(soloDia: boolean = false) {
     if (!tienda || !semanaIdReporte) {
       toast.error("Selecciona una semana primero");
       return;
     }
     try {
-      toast.info("Generando Excel...");
-      const base64 = await generarExcel({ tiendaId: tienda._id, semanaId: semanaIdReporte as any });
+      toast.info(soloDia ? `Generando Excel del día ${fecha}...` : "Generando Excel de toda la semana...");
+      const args: any = { tiendaId: tienda._id, semanaId: semanaIdReporte };
+      if (soloDia) args.fecha = fecha;
+      const base64 = await generarExcel(args);
       const binary = atob(base64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -74,7 +76,8 @@ export default function CajasPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `ubicaciones_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const suffix = soloDia ? `_${fecha}` : "";
+      a.download = `ubicaciones${suffix}_${new Date().toISOString().slice(0, 10)}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
       toast.success("Excel descargado");
@@ -83,9 +86,51 @@ export default function CajasPage() {
     }
   }
 
+  async function handleDescargarPlantilla(soloDia: boolean = false) {
+    if (!tienda || !semanaIdReporte) {
+      toast.error("Selecciona una semana primero");
+      return;
+    }
+    try {
+      toast.info(soloDia ? `Generando plantilla del día ${fecha}...` : "Generando plantilla de toda la semana...");
+      const args: any = { tiendaId: tienda._id, semanaId: semanaIdReporte };
+      if (soloDia) args.fecha = fecha;
+      const base64 = await generarExcel(args);
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const suffix = soloDia ? `_${fecha}` : "_semana";
+      a.download = `plantilla${suffix}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Plantilla descargada");
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  }
+
   // Mapas para búsqueda rápida
   const personaMap = useMemo(() => new Map(personales?.map((p: any) => [p._id, p])), [personales]);
   const cajaMap = useMemo(() => new Map(cajas?.map((c: any) => [c._id, c])), [cajas]);
+
+  // Días de la semana (L-D) de la semana que contiene la fecha seleccionada
+  const DIAS_NOMBRES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+  const weekDates = useMemo(() => {
+    const d = new Date(fecha + "T00:00:00");
+    const dow = d.getDay(); // 0=Dom, 1=Lun, ..., 6=Sáb
+    const diff = dow === 0 ? -6 : 1 - dow;
+    const monday = new Date(d);
+    monday.setDate(monday.getDate() + diff);
+    return Array.from({ length: 7 }, (_, i) => {
+      const day = new Date(monday);
+      day.setDate(day.getDate() + i);
+      return day.toISOString().slice(0, 10);
+    });
+  }, [fecha]);
 
   // Agrupar asignaciones por caja, agrupando 25-30 como un solo bloque
   const asignacionesAgrupadas = useMemo(() => {
@@ -155,16 +200,34 @@ export default function CajasPage() {
         <div>
           <h1 className="text-2xl font-bold">Asignación de Cajas</h1>
           <p className="text-sm text-muted-foreground">
-            30 cajas · Cascada por entrada · Caja 1 preferencial · C25-30 = 1 autoservicio
+            30 cajas · Cascada por entrada · Caja 1 preferencial · C25-30 = autoservicio
           </p>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <input
-            type="date"
-            value={fecha}
-            onChange={(e) => setFecha(e.target.value)}
-            className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-          />
+        <div className="flex gap-2 flex-wrap items-center">
+          {/* Barra de días de la semana */}
+          <div className="flex gap-1">
+            {(["L", "M", "X", "J", "V", "S", "D"] as const).map((letra, i) => {
+              const dateStr = weekDates[i];
+              const isSelected = dateStr === fecha;
+              const dayNum = dateStr.slice(8, 10);
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setFecha(dateStr)}
+                  className={`flex flex-col items-center justify-center h-11 w-11 rounded-md border text-xs transition-colors ${
+                    isSelected
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-background hover:bg-muted border-input"
+                  }`}
+                  title={DIAS_NOMBRES[i]}
+                >
+                  <span className="font-bold text-[11px] leading-none">{letra}</span>
+                  <span className="text-[10px] leading-none mt-0.5">{dayNum}</span>
+                </button>
+              );
+            })}
+          </div>
           <Button onClick={handleEjecutar}>
             <Sparkles className="h-4 w-4 mr-2" />
             Generar y publicar
@@ -418,9 +481,23 @@ export default function CajasPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Button onClick={handleDescargarExcel} disabled={!semanaIdReporte}>
+            <Button
+              onClick={() => handleDescargarExcel(true)}
+              disabled={!semanaIdReporte}
+              variant="outline"
+              size="sm"
+              title="Exporta solo el día seleccionado con formato de plantilla"
+            >
               <Download className="h-4 w-4 mr-2" />
-              Descargar Excel
+              Solo {fecha}
+            </Button>
+            <Button
+              onClick={() => handleDescargarExcel(false)}
+              disabled={!semanaIdReporte}
+              title="Exporta toda la semana con formato de plantilla"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Semana completa
             </Button>
           </div>
         </CardContent>

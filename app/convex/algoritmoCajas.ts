@@ -4,7 +4,7 @@ import { internal } from "./_generated/api";
 import { requireUser, requireUserProfile } from "./_helpers";
 import { generarAsignaciones, type Caja, type Persona, type HorarioDia } from "./lib/algoritmoCajas";
 import { Id } from "./_generated/dataModel";
-import { audit } from "./auditoria";
+import { audit } from "./logs";
 
 // Ejecutar el algoritmo y guardar asignaciones + log
 export const ejecutarAlgoritmo = mutation({
@@ -116,7 +116,7 @@ export const ejecutarAlgoritmo = mutation({
       });
     }
 
-    // 9. Auditoría
+    // 9. Logs
     await audit(ctx, {
       tiendaId: args.tiendaId,
       accion: "crear",
