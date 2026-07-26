@@ -50,6 +50,12 @@ export function toISODate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+export function addDays(d: Date | string, days: number): Date {
+  const date = typeof d === "string" ? new Date(d) : new Date(d.getTime());
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
 export const DIAS_SEMANA = [
   "Lunes",
   "Martes",

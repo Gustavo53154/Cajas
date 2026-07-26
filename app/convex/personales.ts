@@ -435,3 +435,50 @@ export const pegarOperadores = mutation({
     return { asignados, noEncontrados, actualizados, umbral };
   },
 });
+
+// Crea (o reutiliza) un personal con cargo "Self Checkout" y número dado.
+// Útil para auto-crear SELF CHECKOUT 01, 02, etc. cuando se suben informes
+// desde imagen.
+export const ensureSelfCheckout = mutation({
+  args: {
+    tiendaId: v.id("tiendas"),
+    numero: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await requireUser(ctx);
+    const numStr = String(args.numero).padStart(2, "0");
+    const nombre = `SELF CHECKOUT ${numStr}`;
+    // Buscar existente
+    const existentes = await ctx.db
+      .query("personales")
+      .withIndex("by_tienda", (q) => q.eq("tiendaId", args.tiendaId))
+      .collect();
+    for (const p of existentes) {
+      if (
+        p.cargo === "Self Checkout" &&
+        (p.nick === nombre ||
+          p.nick.includes(numStr) ||
+          p.apellidos === nombre ||
+          p.apellidos.includes(numStr))
+      ) {
+        return p._id;
+      }
+    }
+    // Calcular orden siguiente
+    const maxOrden = existentes.reduce((m, p) => Math.max(m, p.orden), 0);
+    const now = Date.now();
+    return await ctx.db.insert("personales", {
+      tiendaId: args.tiendaId,
+      apellidos: nombre,
+      nombres: nombre,
+      nick: nombre,
+      cargo: "Self Checkout",
+      soloCajaRapida: false,
+      esAsistenteAutoservicio: true,
+      activo: true,
+      orden: maxOrden + 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});

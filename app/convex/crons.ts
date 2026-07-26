@@ -4,6 +4,7 @@
 import { cronJobs } from "convex/server";
 import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 
 // Notificación semanal para actualizar meta de indicadores SIP
 export const notificarMetaSemanal = internalMutation({

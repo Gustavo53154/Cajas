@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -8,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Save, Ticket, Trophy } from "lucide-react";
+import { Save, Ticket, Trophy, ImageIcon } from "lucide-react";
 import { toISODate } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -42,12 +43,19 @@ export default function TinkasPage() {
           </h1>
           <p className="text-sm text-muted-foreground">Cantidad de tinkas vendidas por cajero/día</p>
         </div>
-        <Input
-          type="date"
-          value={fecha}
-          onChange={(e) => setFecha(e.target.value)}
-          className="w-44"
-        />
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline">
+            <Link href="/tinkas/imagen">
+              <ImageIcon className="h-4 w-4 mr-2" /> Desde imagen
+            </Link>
+          </Button>
+          <Input
+            type="date"
+            value={fecha}
+            onChange={(e) => setFecha(e.target.value)}
+            className="w-44"
+          />
+        </div>
       </div>
 
       {ranking && ranking.length > 0 && (
