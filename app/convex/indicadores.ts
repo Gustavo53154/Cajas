@@ -387,6 +387,7 @@ function matchRobustoPorApellidosYNombre(
   const apeTokens = apePersonal.toUpperCase().split(/\s+/).filter((t) => t.length >= 2);
   const nomTokens = nomPersonal.toUpperCase().split(/\s+/).filter((t) => t.length >= 2);
 
+  // Contar matches de apellidos (prefijo-compatible)
   let apeMatchCount = 0;
   for (const ape of apeTokens) {
     for (const tok of ocrTokens) {
@@ -398,21 +399,41 @@ function matchRobustoPorApellidosYNombre(
   }
   const apeMatchRatio = apeTokens.length > 0 ? apeMatchCount / apeTokens.length : 0;
 
+  // Verificar que al menos 1 NOMBRE tenga coincidencia FUERTE
+  // (no solo la primera letra, sino prefijo de >= 3 chars o exacto)
   let nomMatch = false;
+  let nomExactMatch = false;
   for (const nom of nomTokens) {
     if (nom.length === 0) continue;
-    const primera = nom[0];
     for (const tok of ocrTokens) {
-      if (tok.length > 0 && tok[0] === primera) {
+      // Coincidencia EXACTA del nombre completo
+      if (tok === nom) {
         nomMatch = true;
+        nomExactMatch = true;
         break;
+      }
+      // Prefijo de >= 3 chars del nombre está en el OCR
+      if (nom.length >= 3) {
+        for (let len = Math.min(nom.length, 6); len >= 3; len--) {
+          if (tok.startsWith(nom.slice(0, len))) {
+            nomMatch = true;
+            break;
+          }
+        }
       }
     }
     if (nomMatch) break;
   }
 
+  // REQUISITO ESTRICTO: para que sea match, debe haber:
+  // - Al menos 1 match de nombre (exacto o prefijo >= 3)
+  // - Y al menos 1 match de apellido (prefijo-compatible)
+  // Esto evita matches como "ALLIZON ANDREA GUERR" → "GUERRERO GONZALES AKEMI"
+  // donde solo un prefijo de apellido + primera letra de nombre coincidian.
+  const match = nomMatch && apeMatchCount >= 1;
+
   const score = apeMatchRatio * 0.7 + (nomMatch ? 0.3 : 0);
-  return { match: apeMatchCount >= 1 && nomMatch, score, apeMatchRatio, nomMatch };
+  return { match, score, apeMatchRatio, nomMatch };
 }
 
 // Encuentra la longitud de la subcadena común más larga entre dos strings.
@@ -582,17 +603,27 @@ export const importarTinkasDesdeImagen = mutation({
                 const allTokens = [...tokensApe, ...tokensNom];
 
                 let tokenHits = 0;
+                let exactWordHits = 0;
                 let totalLcsChars = 0;
                 for (const t of allTokens) {
                   let hit = false;
                   let hitLen = 0;
+                  let isExact = false;
+                  // 0) Coincidencia EXACTA del token (>= 3 chars) en el OCR
+                  if (t.length >= 3 && ocrConcat.includes(t)) {
+                    hit = true;
+                    isExact = true;
+                    hitLen = t.length;
+                  }
                   // 1) Prefijo del token (>= 4 chars) aparece en el OCR
-                  for (let len = Math.min(t.length, 8); len >= 4; len--) {
-                    const pref = t.slice(0, len);
-                    if (ocrConcat.includes(pref)) {
-                      hit = true;
-                      hitLen = len;
-                      break;
+                  if (!hit) {
+                    for (let len = Math.min(t.length, 8); len >= 4; len--) {
+                      const pref = t.slice(0, len);
+                      if (ocrConcat.includes(pref)) {
+                        hit = true;
+                        hitLen = len;
+                        break;
+                      }
                     }
                   }
                   // 2) Si no, sufijo del token (>= 4 chars) aparece en el OCR
@@ -616,6 +647,7 @@ export const importarTinkasDesdeImagen = mutation({
                   }
                   if (hit) {
                     tokenHits++;
+                    if (isExact) exactWordHits++;
                     totalLcsChars += hitLen;
                   }
                 }
@@ -651,7 +683,22 @@ export const importarTinkasDesdeImagen = mutation({
                   }
                 }
 
-                if (tokenHits >= 2 || concatHit || structuralScore > 0) {
+                // VALIDACIÓN CRÍTICA: al menos 1 token de NOMBRE debe coincidir.
+                // Esto evita matches absurdos como "DIEGO" → "ENRIQUE HUMBERTO".
+                const hayMatchNombre = tokensNom.some((tn) => {
+                  for (let len = Math.min(tn.length, 6); len >= 3; len--) {
+                    if (ocrConcat.includes(tn.slice(0, len))) return true;
+                  }
+                  return longestCommonSubstring(ocrConcat, tn) >= 3;
+                });
+                if (!hayMatchNombre) continue;
+
+                // REQUISITO MÍNIMO: al menos 1 palabra EXACTA + 1 match adicional
+                const suficientesMatches =
+                  (exactWordHits >= 1 && tokenHits >= 2) ||
+                  (concatHit) ||
+                  (structuralScore > 0 && exactWordHits >= 1);
+                if (suficientesMatches) {
                   const baseScore = 0.65 + Math.min(0.2, totalLcsChars * 0.005);
                   const finalScore = Math.max(baseScore, structuralScore);
                   if (!bestR || finalScore > bestR.sim) {
@@ -833,6 +880,7 @@ export const sugerirMatchTinka = query({
               const allTokens = [...tokensApe, ...tokensNom];
 
               let tokenHits = 0;
+              let exactWordHits = 0;
               let totalLcsChars = 0;
               for (const t of allTokens) {
                 let hit = false;
@@ -899,7 +947,21 @@ export const sugerirMatchTinka = query({
                 }
               }
 
-              if (tokenHits >= 2 || concatHit || structuralScore > 0) {
+              // VALIDACIÓN CRÍTICA: al menos 1 token de NOMBRE debe coincidir.
+              const hayMatchNombre = tokensNom.some((tn) => {
+                for (let len = Math.min(tn.length, 6); len >= 3; len--) {
+                  if (ocrConcat.includes(tn.slice(0, len))) return true;
+                }
+                return longestCommonSubstring(ocrConcat, tn) >= 3;
+              });
+              if (!hayMatchNombre) continue;
+
+              // REQUISITO MÍNIMO: al menos 1 palabra EXACTA + 1 match adicional
+              const suficientesMatches =
+                (exactWordHits >= 1 && tokenHits >= 2) ||
+                (concatHit) ||
+                (structuralScore > 0 && exactWordHits >= 1);
+              if (suficientesMatches) {
                 const baseScore = 0.65 + Math.min(0.2, totalLcsChars * 0.005);
                 const finalScore = Math.max(baseScore, structuralScore);
                 if (!bestR || finalScore > bestR.sim) {

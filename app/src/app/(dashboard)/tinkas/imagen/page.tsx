@@ -113,22 +113,85 @@ function autoDetectarFecha(diaSemana: string, diaMes: number, refMes?: Date): st
 // Pre-procesa la imagen antes del OCR para mejorar la precisión:
 // escala de grises, aumento de contraste, escalado 2x, binarización adaptativa.
 async function preprocesarImagen(file: File | Blob): Promise<Blob> {
-  // Pre-procesamiento mínimo: solo escalado 2x.
-  // Cualquier transformación adicional (binarización, estiramiento de contraste)
-  // estaba causando más daño que beneficio en imágenes de este estilo.
+  // Pipeline conservador: solo escalar 2x + grayscale + contraste normalizado.
+  // Cualquier intento de recorte automático, binarización agresiva o
+  // sharpen estaba cortando las filas de la tabla.
   const bitmap = await createImageBitmap(file);
+  const W = bitmap.width;
+  const H = bitmap.height;
   const scale = 2;
   const canvas = document.createElement("canvas");
-  canvas.width = bitmap.width * scale;
-  canvas.height = bitmap.height * scale;
+  canvas.width = W * scale;
+  canvas.height = H * scale;
   const ctx = canvas.getContext("2d");
   if (!ctx) return file;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  // Escala de grises + normalización de contraste
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = img.data;
+  let minV = 255, maxV = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
+    if (g < minV) minV = g;
+    if (g > maxV) maxV = g;
+  }
+  const range = maxV - minV || 1;
+  for (let i = 0; i < d.length; i += 4) {
+    let g = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
+    g = ((g - minV) * 255 / range) | 0;
+    d[i] = g;
+    d[i + 1] = g;
+    d[i + 2] = g;
+    d[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
   return new Promise<Blob>((resolve) => {
     canvas.toBlob((b) => resolve(b ?? file), "image/png");
   });
+}
+
+// Aplica unsharp mask para mejorar la nitidez de los números
+function applyUnsharpMask(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  amount: number,
+  radius: number
+) {
+  // Crear copia borrosa
+  const blurred = new Uint8ClampedArray(data.length);
+  const r = Math.max(1, Math.floor(radius));
+  // Box blur simple
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sum = 0, count = 0;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const ny = y + dy, nx = x + dx;
+          if (ny >= 0 && ny < height && nx >= 0 && nx < width) {
+            const i = (ny * width + nx) * 4;
+            sum += data[i];
+            count++;
+          }
+        }
+      }
+      const i = (y * width + x) * 4;
+      blurred[i] = sum / count;
+      blurred[i + 1] = sum / count;
+      blurred[i + 2] = sum / count;
+      blurred[i + 3] = 255;
+    }
+  }
+  // Mezclar: result = original + (original - blurred) * amount
+  for (let i = 0; i < data.length; i += 4) {
+    const diff = data[i] - blurred[i];
+    const sharpened = data[i] + diff * amount;
+    data[i] = Math.max(0, Math.min(255, sharpened));
+    data[i + 1] = data[i];
+    data[i + 2] = data[i];
+  }
 }
 
 export default function TinkasImagenPage() {
@@ -230,10 +293,11 @@ function SubirImagenTab() {
     try {
       const Tesseract = await import("tesseract.js");
       setOcrStatus("processing");
-      // Pre-procesar la imagen para mejorar la precisión del OCR:
-      // escala de grises + aumento de contraste + escala 2x + binarización adaptativa
-      const imagenProcesada = await preprocesarImagen(imageFile);
-      const result = await Tesseract.recognize(imagenProcesada, "spa", {
+      // Configuración optimizada para informes de tinkas:
+      // - PSM 6: bloque uniforme de texto (mejor para tablas)
+      // - Whitelist con letras+dígitos para nombres, sin caracteres especiales
+      // - OEM 1: LSTM neural net (más preciso que el clásico)
+      const result = await Tesseract.recognize(imageFile, "spa", {
         logger: (m: any) => {
           if (m.status) setOcrStatusText(m.status);
           if (typeof m.progress === "number") setOcrProgress(Math.round(m.progress * 100));
@@ -499,17 +563,27 @@ function SubirImagenTab() {
           // (no solo una subcadena cualquiera, para evitar falsos positivos
           // como "MEND" dentro de "ALMENDRE" matcheando con "MENDIE")
           let tokenHits = 0;
+          let exactWordHits = 0; // matches de palabra EXACTA (>= 3 chars)
           let totalLcsChars = 0;
           for (const t of allTokens) {
             let hit = false;
             let hitLen = 0;
+            let isExact = false;
+            // 0) Coincidencia EXACTA del token completo (>= 3 chars) en el OCR
+            if (t.length >= 3 && ocrConcat.includes(t)) {
+              hit = true;
+              isExact = true;
+              hitLen = t.length;
+            }
             // 1) Prefijo del token (>= 4 chars) aparece en el OCR
-            for (let len = Math.min(t.length, 8); len >= 4; len--) {
-              const pref = t.slice(0, len);
-              if (ocrConcat.includes(pref)) {
-                hit = true;
-                hitLen = len;
-                break;
+            if (!hit) {
+              for (let len = Math.min(t.length, 8); len >= 4; len--) {
+                const pref = t.slice(0, len);
+                if (ocrConcat.includes(pref)) {
+                  hit = true;
+                  hitLen = len;
+                  break;
+                }
               }
             }
             // 2) Si no, sufijo del token (>= 4 chars) aparece en el OCR
@@ -533,6 +607,7 @@ function SubirImagenTab() {
             }
             if (hit) {
               tokenHits++;
+              if (isExact) exactWordHits++;
               totalLcsChars += hitLen;
             }
           }
@@ -568,6 +643,22 @@ function SubirImagenTab() {
             }
           }
 
+          // VALIDACIÓN CRÍTICA: al menos 1 token de NOMBRE debe coincidir.
+          // Esto evita matches absurdos como "DIEGO" → "ENRIQUE HUMBERTO".
+          const hayMatchNombre = tokensNom.some((tn) => {
+            // Verificar que tn (o un prefijo de >= 3 chars) esté en el OCR
+            for (let len = Math.min(tn.length, 6); len >= 3; len--) {
+              if (ocrConcat.includes(tn.slice(0, len))) return true;
+            }
+            // Verificar LCS >= 3
+            return longestCommonSubstring(ocrConcat, tn) >= 3;
+          });
+          if (!hayMatchNombre) {
+            // NO hay match de nombre → no es esta persona
+            // (continuar con el siguiente personal)
+            continue;
+          }
+
           // También verificar concatenaciones (para nombres largos concatenados)
           const apeConcat = p.apellidos.toUpperCase().replace(/\s+/g, "");
           const nomConcat = p.nombres.toUpperCase().replace(/\s+/g, "");
@@ -579,9 +670,14 @@ function SubirImagenTab() {
             (v) => ocrConcat.includes(v) || v.includes(ocrConcat),
           );
 
-          // Match si: al menos 2 tokens coinciden, O una concatenación coincide,
-          // O el matching estructural encontró coincidencia
-          if (tokenHits >= 2 || concatHit || structuralScore > 0) {
+          // REQUISITO MÍNIMO: al menos 1 palabra EXACTA + 1 match adicional (palabra exacta, prefijo, o estructural)
+          // Esto evita matches como "ENRIQUE EDUARDO PERE" → "LOPEZ LOPEZ ENRIQUE HUMBERTO"
+          // donde solo "ENRIQUE" coincide pero el resto es completamente diferente.
+          const suficientesMatches =
+            (exactWordHits >= 1 && tokenHits >= 2) || // 1 palabra exacta + al menos 1 match más
+            (concatHit) ||
+            (structuralScore > 0 && exactWordHits >= 1); // estructural + al menos 1 palabra exacta
+          if (suficientesMatches) {
             const baseScore = 0.65 + Math.min(0.2, totalLcsChars * 0.005);
             const finalScore = Math.max(baseScore, structuralScore);
             if (!bestRobusto || finalScore > bestRobusto.sim) {
@@ -1456,11 +1552,24 @@ function extraerFilas(
     }
   }
 
-  // Recalcular colsDias después del posible fallback
+  // Recalcular colsDias después del posible fallback.
+  // IMPORTANTE: NO sobrescribir fechas de columnas que fueron marcadas como
+  // undefined (por cambio de mes o fuera de rango). Solo asignar fecha a
+  // columnas que aún no tienen fecha asignada.
   colsDias = colsTemp.filter((c) => c.tipo === "dia");
-  colsDias.forEach((c, idx) => {
-    c.fecha = addDaysToISO(fechaReferencia, idx);
+  let autoIdx = 0;
+  colsDias.forEach((c) => {
+    if (c.fecha === undefined) {
+      c.fecha = addDaysToISO(fechaReferencia, autoIdx);
+      autoIdx++;
+    }
   });
+  // Filtrar columnas con fecha undefined para que no se muestren ni se procesen
+  for (let i = colsTemp.length - 1; i >= 0; i--) {
+    if (colsTemp[i].tipo === "dia" && colsTemp[i].fecha === undefined) {
+      colsTemp.splice(i, 1);
+    }
+  }
 
   // Si la primera columna de día tiene un day-of-week en el label, validar
   // (esto no cambia el cálculo, solo es informativo)
@@ -1586,15 +1695,69 @@ function extraerFilas(
     });
 
     contador++;
+    // Post-procesamiento: corregir errores comunes de OCR
+    // Los valores de tinkas por día suelen ser 0-20
+    // Si un valor es > 99, es probable error de OCR (ej: "6" → "60", "0" → "300")
+    const diasCorregidos = diasFila.map((d) => {
+      if (d.cantidad > 99) {
+        // Intentar corregir: probablemente se agregó un dígito extra
+        // Estrategia: si el valor es 100-999, probablemente es un dígito extra
+        // Si es 1000+, descartar
+        if (d.cantidad >= 1000) {
+          return { ...d, cantidad: 0 };
+        }
+        // Si el valor es 100-999, probablemente se concatenó un "0" o "00"
+        // ej: 417 → 41 o 17; 300 → 30 o 3
+        const str = String(d.cantidad);
+        // Probar quitar el primer dígito
+        const sinPrimero = parseInt(str.slice(1), 10);
+        if (sinPrimero >= 0 && sinPrimero < 100) {
+          return { ...d, cantidad: sinPrimero };
+        }
+        // Probar quitar el último dígito
+        const sinUltimo = parseInt(str.slice(0, -1), 10);
+        if (sinUltimo >= 0 && sinUltimo < 100) {
+          return { ...d, cantidad: sinUltimo };
+        }
+        return { ...d, cantidad: 0 };
+      }
+      return d;
+    });
+
+    // Corregir acumulado si es > 2000
+    let acumCorregido = acumuladoNum;
+    if (acumCorregido > 2000) {
+      const str = String(acumCorregido);
+      // Probar quitar dígitos extra
+      if (acumCorregido >= 10000) {
+        acumCorregido = 0;
+      } else {
+        const sinPrimero = parseInt(str.slice(1), 10);
+        if (sinPrimero < 2000) acumCorregido = sinPrimero;
+      }
+    }
+
+    // Corregir total si es > 5000
+    let totalCorregido = totalNum;
+    if (totalCorregido > 5000) {
+      const str = String(totalCorregido);
+      if (totalCorregido >= 10000) {
+        totalCorregido = 0;
+      } else {
+        const sinPrimero = parseInt(str.slice(1), 10);
+        if (sinPrimero < 5000) totalCorregido = sinPrimero;
+      }
+    }
+
     filasDetectadas.push({
       filaId: `f${Date.now()}_${contador}`,
       nombreOriginal: nombre,
       nombreEditable: nombre,
       personalId: null,
       sugerenciaPersonalId: null,
-      dias: diasFila,
-      total: totalNum,
-      acumulado: acumuladoNum,
+      dias: diasCorregidos,
+      total: totalCorregido,
+      acumulado: acumCorregido,
     });
   }
 
@@ -1676,7 +1839,7 @@ function matchPorApellidosYNombre(
   const apeTokens = apePersonal.toUpperCase().split(/\s+/).filter((t) => t.length >= 2);
   const nomTokens = nomPersonal.toUpperCase().split(/\s+/).filter((t) => t.length >= 2);
 
-  // Contar cuántos apellidos del personal matchean con algún token OCR (prefijo-compatible)
+  // Contar matches de apellidos (prefijo-compatible)
   let apeMatchCount = 0;
   for (const ape of apeTokens) {
     for (const tok of ocrTokens) {
@@ -1688,26 +1851,36 @@ function matchPorApellidosYNombre(
   }
   const apeMatchRatio = apeTokens.length > 0 ? apeMatchCount / apeTokens.length : 0;
 
-  // Verificar al menos 1 letra del nombre presente en OCR
+  // Verificar coincidencia FUERTE de nombre (no solo primera letra)
+  // Requiere: palabra EXACTA o prefijo de >= 3 chars del nombre en el OCR
   let nomMatch = false;
   for (const nom of nomTokens) {
     if (nom.length === 0) continue;
-    const primeraLetra = nom[0];
     for (const tok of ocrTokens) {
-      if (tok.length > 0 && tok[0] === primeraLetra) {
+      // Coincidencia EXACTA
+      if (tok === nom) {
         nomMatch = true;
         break;
+      }
+      // Prefijo de >= 3 chars del nombre está al inicio del token OCR
+      if (nom.length >= 3) {
+        for (let len = Math.min(nom.length, 6); len >= 3; len--) {
+          if (tok.startsWith(nom.slice(0, len))) {
+            nomMatch = true;
+            break;
+          }
+        }
       }
     }
     if (nomMatch) break;
   }
 
-  // Score combinado: 70% apellidos + 30% nombre
+  // REQUISITO ESTRICTO: nombre (exacto o prefijo >= 3) Y al menos 1 apellido.
+  // Esto evita matches como "ALLIZON ANDREA GUERR" → "GUERRERO GONZALES AKEMI"
+  // donde solo un prefijo de apellido + primera letra de nombre coincidian.
+  const match = nomMatch && apeMatchCount >= 1;
+
   const score = apeMatchRatio * 0.7 + (nomMatch ? 0.3 : 0);
-
-  // Match si: al menos 1 apellido compatible Y al menos 1 letra del nombre coincide
-  const match = apeMatchCount >= 1 && nomMatch;
-
   return { match, score, apeMatchRatio, nomMatch };
 }
 
