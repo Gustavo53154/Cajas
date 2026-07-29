@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { authTables } from "@convex-dev/auth/server";
 
-// Tabla auxiliar: roles permitidos
+// Cargos del personal (NO son roles de usuario; el personal no accede al sistema)
 const cargoEnum = v.union(
   v.literal("Cajer@"),
   v.literal("Self Checkout"),
@@ -14,12 +14,18 @@ const cargoEnum = v.union(
   v.literal("Gerente"),
 );
 
-const rolSistemaEnum = v.union(
-  v.literal("Admin"),
-  v.literal("JefeCajas"),
-  v.literal("Supervisor"),
-  v.literal("SubGerente"),
-  v.literal("Gerente"),
+// Tipo de cuenta de tienda (Caja o Gerencia)
+const tipoCuentaTiendaEnum = v.union(
+  v.literal("Cajas"),
+  v.literal("Gerencia"),
+);
+
+// Estado de solicitud de reseteo de contraseña
+const estadoSolicitudResetEnum = v.union(
+  v.literal("pendiente"),
+  v.literal("aceptada"),
+  v.literal("rechazada"),
+  v.literal("expirada"),
 );
 
 const tipoCajaEnum = v.union(
@@ -101,18 +107,94 @@ export default defineSchema({
   tiendas: defineTable({
     nombre: v.string(),
     codigo: v.string(),
-    activa: v.boolean(),
-  }),
+    direccion: v.string(),
 
+    // Configuración de cajas (INMUTABLE post-creación)
+    nCajasRegulares: v.number(),
+    nCajasRapidas: v.number(),
+    nCajasSelf: v.number(),
+
+    // Flags de personal (INMUTABLE post-creación)
+    tienePersonalSelf: v.boolean(),
+    tienePersonalRs: v.boolean(),
+
+    // Asignación de JE (1 tienda → 1 JE)
+    jefeEntrenadorId: v.id("jefesEntrenador"),
+
+    activa: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_activa", ["activa"])
+    .index("by_codigo", ["codigo"])
+    .index("by_je", ["jefeEntrenadorId"]),
+
+  // ===== Admins (usuarios globales) =====
+  admins: defineTable({
+    username: v.string(),          // único global, lowercase
+    nombre: v.string(),
+    apellido: v.string(),
+    passwordHash: v.string(),
+    activo: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastLoginAt: v.optional(v.number()),
+  })
+    .index("by_username", ["username"])
+    .index("by_activo", ["activo"]),
+
+  // ===== JefesEntrenador (usuarios globales) =====
+  jefesEntrenador: defineTable({
+    username: v.string(),          // único global, lowercase
+    nombre: v.string(),
+    apellido: v.string(),
+    passwordHash: v.string(),
+    mustChangePassword: v.boolean(),   // true al crear (pass = 12345678)
+    activo: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastLoginAt: v.optional(v.number()),
+  })
+    .index("by_username", ["username"])
+    .index("by_activo", ["activo"]),
+
+  // ===== Solicitudes de reseteo de contraseña (Caja/Gerencia → JE) =====
+  passwordResetRequests: defineTable({
+    tiendaId: v.id("tiendas"),
+    tipoSolicitante: tipoCuentaTiendaEnum,
+    userProfileId: v.id("userProfiles"),
+    usernameSnapshot: v.string(),
+    motivo: v.optional(v.string()),
+    estado: estadoSolicitudResetEnum,
+    respondidaPorJefeEntrenadorId: v.optional(v.id("jefesEntrenador")),
+    respondidaAt: v.optional(v.number()),
+    motivoRechazo: v.optional(v.string()),
+    passwordReseteadaHash: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_tienda_estado", ["tiendaId", "estado"])
+    .index("by_userprofile", ["userProfileId"])
+    .index("by_je", ["respondidaPorJefeEntrenadorId"]),
+
+  // ===== Cuentas de tienda (Caja y Gerencia) =====
   // Usuarios (auth) - manejados por convex-auth en tabla `users`
   // Tabla adicional para extender users con info de la app
   userProfiles: defineTable({
     userId: v.id("users"),
     tiendaId: v.id("tiendas"),
+    tipoCuenta: tipoCuentaTiendaEnum,
     nombreCompleto: v.string(),
-    rol: rolSistemaEnum,
-    personalId: v.optional(v.id("personales")),
-  }).index("by_user", ["userId"]).index("by_tienda", ["tiendaId"]),
+    username: v.string(),          // denormalizado para unicidad global rápida
+    activo: v.boolean(),
+    mustChangePassword: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastLoginAt: v.optional(v.number()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_tienda", ["tiendaId"])
+    .index("by_tienda_tipo", ["tiendaId", "tipoCuenta"])
+    .index("by_username", ["username"]),
 
   // ===== Personal (cajeros) =====
   personales: defineTable({
